@@ -14,71 +14,79 @@
  should all have a controller reference pointing to the parent workload instance.
 
 ## Background
-Traits and workloads are two major types of resources in OAM. Traits usually affect how a
-kubernetes resource operate either directly (through spec change) or indirectly (add ingress or
-sidecar). However, the current OAM implementation does not contain a generic mechanism for traits
- to locate the corresponding resource to modify. 
- 
-We will use the following hypothetical OAM application as the baseline to illustrate the problem
- and our solution.
+OAM model traits as a discretionary runtime overlay that augments a component workload type. 
+Traits usually affect how a kubernetes resource operate either directly (through spec change) or 
+indirectly (add ingress or sidecar). There are cases that the traits may modify the workload in a
+way that may affect the availability of the workload itself. We will use the following
+hypothetical OAM application to illustrate the problem and our solution.
  
 ```yaml
 apiVersion: core.oam.dev/v1alpha2
 kind: WorkloadDefinition
 metadata:
-name: mydbs.standard.oam.dev
+  name: zookeepers.workload.alibaba-inc.com
 spec:
-definitionRef:
-  name: mydbs.standard.oam.dev
+  definitionRef:
+    name: zookeepers.workload.alibaba-inc.com
 ---
 apiVersion: core.oam.dev/v1alpha2
 kind: TraitDefinition
 metadata:
-name: manualscalertraits.core.oam.dev
+  name: fileInjecters.trait.alibaba-inc.com
 spec:
-definitionRef:
- name: manualscalertraits.core.oam.dev
+  definitionRef:
+    name: fileInjecters.trait.alibaba-inc.com
 ---
 apiVersion: core.oam.dev/v1alpha2
 kind: Component
 metadata:
-name: example-db
+  name: example-zk
 spec:
-workload:
- apiVersion: standard.oam.dev/v1alpha2
- kind: Mydb
- metadata:
-   name: mydb-example
- spec:
-   containers:
-     - name: mysql
-       image: mysql:latest
+  workload:
+    apiVersion: workload.alibaba-inc.com/v1beta1
+    kind: ZooKeeper
+    metadata:
+      name: myzk-example
+    spec:
+      containers:
+      - name: k8s-zk
+        image: kubernetes-zookeeper:latest
 ---
 apiVersion: core.oam.dev/v1alpha2
 kind: ApplicationConfiguration
 metadata:
-name: example-appconfig
+  name: example-appconfig
 spec:
-components:
- - componentName: example-db      
-   traits:
-     - trait:
-         apiVersion: core.oam.dev/v1alpha2
-         kind: ManualScalerTrait
-         metadata:
-           name:  example-appconfig-trait
-         spec:
-           replicaCount: 3
+  components:
+    - componentName: example-zk     
+      traits:
+      - trait:
+        apiVersion: trait.alibaba-inc.com/v1alpha1
+        kind: FileInjecter
+        metadata:
+          name:  server-file-injecter
+        spec:
+          mount:
+            mountDir: "/home/admin/data"
+            fileName: "server.conf"  
+          data: |
+            zk.host=xxxx
+      - trait:
+        apiVersion: trait.alibaba-inc.com/v1alpha1
+        kind: FileInjecter
+        metadata:
+          name:  zooconf-file-injecter
+        spec:
+          mount:
+            mountDir: "/home/conf"
+            fileName: "zoo.cfg"  
+          data: |
+            dataDir=/home/admin/data
 ```
 
-The problem is two folds
-1. A trait controller needs a way to find the workload that it is applied to. 
-   - In the example, the manual scalar trait needs to know that it is supposed to scale the
-    example-db workload. However, we want to keep the applicationConfiguration controller
-    agnostic to the schema of any `trait` or `workload` it generates to make it extensible.
-    Thus, the applicationConfiguration controller needs to emit a `ManualScalerTrait` CR that
-    contains a reference to the `example-db` workload without knowing the trait's specific schema.
-    
+In this example, we have a zookeeper component and use two fileinjector traits to dynamically
+ mount two configuration files. This may create a problem as each fileInjector trait mounts a new 
+ 
 2. A trait controller needs to know the exact resources it should modify. Note that these
 resources are most likely not the workload itself.
     - Use the same example, just knowing the `example-db` workload is not enough for the
